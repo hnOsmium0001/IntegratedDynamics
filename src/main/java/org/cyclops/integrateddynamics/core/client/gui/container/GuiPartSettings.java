@@ -1,5 +1,6 @@
 package org.cyclops.integrateddynamics.core.client.gui.container;
 
+import com.google.common.collect.BiMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import lombok.Data;
@@ -9,6 +10,7 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.text.TextFormatting;
+import org.apache.commons.lang3.tuple.Pair;
 import org.cyclops.cyclopscore.client.gui.component.button.GuiButtonText;
 import org.cyclops.cyclopscore.client.gui.component.input.GuiNumberField;
 import org.cyclops.cyclopscore.client.gui.container.GuiContainerExtended;
@@ -19,9 +21,8 @@ import org.cyclops.cyclopscore.helper.ValueNotifierHelpers;
 import org.cyclops.cyclopscore.init.ModBase;
 import org.cyclops.integrateddynamics.GeneralConfig;
 import org.cyclops.integrateddynamics.IntegratedDynamics;
-import org.cyclops.integrateddynamics.api.part.IPartContainer;
-import org.cyclops.integrateddynamics.api.part.IPartType;
-import org.cyclops.integrateddynamics.api.part.PartTarget;
+import org.cyclops.integrateddynamics.api.network.INetwork;
+import org.cyclops.integrateddynamics.api.part.*;
 import org.cyclops.integrateddynamics.core.client.gui.ExtendedGuiHandler;
 import org.cyclops.integrateddynamics.core.client.gui.GuiTextFieldDropdown;
 import org.cyclops.integrateddynamics.core.client.gui.IDropdownEntry;
@@ -29,10 +30,8 @@ import org.cyclops.integrateddynamics.core.inventory.container.ContainerPartSett
 import org.lwjgl.input.Keyboard;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.Locale;
+import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -44,16 +43,20 @@ import java.util.stream.Collectors;
 public class GuiPartSettings extends GuiContainerExtended {
 
     public static final int BUTTON_SAVE = 0;
+    public static final int BUTTON_NEW_CHANNEL = 1;
 
     private final PartTarget target;
     private final IPartContainer partContainer;
     private final IPartType partType;
 
+    private BiMap<String, Integer> channelMappings;
+
     private GuiNumberField numberFieldUpdateInterval = null;
     private GuiNumberField numberFieldPriority = null;
-    private GuiNumberField numberFieldChannel = null;
+    private GuiTextFieldDropdown<String> dropdownFieldChannel = null;
+    private Map<String, ChannelDropdownEntry> dropdownChannelEntries;
     private GuiTextFieldDropdown<EnumFacing> dropdownFieldSide = null;
-    private List<SideDropdownEntry> dropdownEntries;
+    private List<SideDropdownEntry> dropdownSideEntries;
 
     /**
      * Make a new instance.
@@ -78,22 +81,24 @@ public class GuiPartSettings extends GuiContainerExtended {
     protected void onSave() {
         IntegratedDynamics._instance.getGuiHandler().setTemporaryData(ExtendedGuiHandler.PART, getTarget().getCenter().getSide());
         try {
+            ContainerPartSettings container = (ContainerPartSettings) getContainer();
             if (isFieldSideEnabled()) {
                 EnumFacing selectedSide = dropdownFieldSide.getSelectedDropdownPossibility() == null ? null : dropdownFieldSide.getSelectedDropdownPossibility().getValue();
                 int side = selectedSide != null && selectedSide != getDefaultSide() ? selectedSide.ordinal() : -1;
-                ValueNotifierHelpers.setValue(getContainer(), ((ContainerPartSettings) getContainer()).getLastSideValueId(), side);
+                ValueNotifierHelpers.setValue(getContainer(), container.getLastSideValueId(), side);
             }
             if (isFieldUpdateIntervalEnabled()) {
                 int updateInterval = numberFieldUpdateInterval.getInt();
-                ValueNotifierHelpers.setValue(getContainer(), ((ContainerPartSettings) getContainer()).getLastUpdateValueId(), updateInterval);
+                ValueNotifierHelpers.setValue(getContainer(), container.getLastUpdateValueId(), updateInterval);
             }
             if (isFieldPriorityEnabled()) {
                 int priority = numberFieldPriority.getInt();
-                ValueNotifierHelpers.setValue(getContainer(), ((ContainerPartSettings) getContainer()).getLastPriorityValueId(), priority);
+                ValueNotifierHelpers.setValue(getContainer(), container.getLastPriorityValueId(), priority);
             }
             if (isFieldChannelEnabled()) {
-                int channel = numberFieldChannel.getInt();
-                ValueNotifierHelpers.setValue(getContainer(), ((ContainerPartSettings) getContainer()).getLastChannelValueId(), channel);
+                String selectedChannel = dropdownFieldChannel.getSelectedDropdownPossibility() == null ? null : dropdownFieldChannel.getSelectedDropdownPossibility().getValue();
+                int channel = selectedChannel != null ? channelMappings.get(selectedChannel) : -1;
+                ValueNotifierHelpers.setValue(getContainer(), container.getLastChannelValueId(), channel);
             }
         } catch (NumberFormatException e) { }
     }
@@ -122,9 +127,9 @@ public class GuiPartSettings extends GuiContainerExtended {
         Keyboard.enableRepeatEvents(true);
 
         if (isFieldSideEnabled()) {
-            dropdownEntries = Arrays.stream(EnumFacing.VALUES).map(SideDropdownEntry::new).collect(Collectors.toList());
+            dropdownSideEntries = Arrays.stream(EnumFacing.VALUES).map(SideDropdownEntry::new).collect(Collectors.toList());
             dropdownFieldSide = new GuiTextFieldDropdown(0, Minecraft.getMinecraft().fontRenderer, guiLeft + 106, guiTop + getFieldSideY(),
-                    70, 14, true, Sets.newHashSet(dropdownEntries));
+                    70, 14, true, Sets.newHashSet(dropdownSideEntries));
             setSideInDropdownField(getCurrentSide());
             dropdownFieldSide.setMaxStringLength(15);
             dropdownFieldSide.setVisible(true);
@@ -152,17 +157,24 @@ public class GuiPartSettings extends GuiContainerExtended {
         }
 
         if (isFieldChannelEnabled()) {
-            numberFieldChannel = new GuiNumberField(0, Minecraft.getMinecraft().fontRenderer, guiLeft + 106, guiTop + getFieldChannelY(), 70, 14, true, true);
-            numberFieldChannel.setPositiveOnly(false);
-            numberFieldChannel.setMaxStringLength(15);
-            numberFieldChannel.setVisible(true);
-            numberFieldChannel.setTextColor(16777215);
-            numberFieldChannel.setCanLoseFocus(true);
-            numberFieldChannel.setEnabled(isChannelEnabled());
+            Pair<IPartType, IPartState> state = PartPos.getPartData(target.getCenter());
+            // TODO
+            INetwork network = null;
+            channelMappings = network.getChannelMappings();
+            dropdownChannelEntries = channelMappings.entrySet().stream()
+                    .map(ChannelDropdownEntry::new)
+                    .collect(Collectors.toMap(entry -> entry.channelName, Function.identity()));
+            dropdownFieldChannel = new GuiTextFieldDropdown(0, Minecraft.getMinecraft().fontRenderer, guiLeft + 106, guiTop + getFieldChannelY(), 70, 14, true, Sets.newHashSet(dropdownChannelEntries.values()));
+            dropdownFieldChannel.setMaxStringLength(15);
+            dropdownFieldChannel.setVisible(true);
+            dropdownFieldChannel.setTextColor(16777215);
+            dropdownFieldChannel.setCanLoseFocus(true);
+            dropdownFieldChannel.setEnabled(isChannelEnabled());
         }
 
         String save = L10NHelpers.localize("gui.integrateddynamics.button.save");
         buttonList.add(new GuiButtonText(BUTTON_SAVE, this.guiLeft + 178, this.guiTop + 8, fontRenderer.getStringWidth(save) + 6, 16, save, true));
+        buttonList.add(new GuiButtonText(BUTTON_NEW_CHANNEL, this.guiLeft + 178, this.guiTop + getFieldChannelY(), fontRenderer.getCharWidth('+'), 16, "+", true));
 
         this.refreshValues();
     }
@@ -204,7 +216,7 @@ public class GuiPartSettings extends GuiContainerExtended {
         if (!this.checkHotbarKeys(keyCode)) {
             if (!(isFieldUpdateIntervalEnabled() && this.numberFieldUpdateInterval.textboxKeyTyped(typedChar, keyCode))
                     && !(isFieldPriorityEnabled() && this.numberFieldPriority.textboxKeyTyped(typedChar, keyCode))
-                    && !(isFieldChannelEnabled() && this.numberFieldChannel.textboxKeyTyped(typedChar, keyCode))
+                    && !(isFieldChannelEnabled() && this.dropdownFieldChannel.textboxKeyTyped(typedChar, keyCode))
                     && !(isFieldSideEnabled() && this.dropdownFieldSide.textboxKeyTyped(typedChar, keyCode))) {
                 super.keyTyped(typedChar, keyCode);
             }
@@ -223,7 +235,7 @@ public class GuiPartSettings extends GuiContainerExtended {
             this.numberFieldPriority.mouseClicked(mouseX, mouseY, mouseButton);
         }
         if (isFieldChannelEnabled()) {
-            this.numberFieldChannel.mouseClicked(mouseX, mouseY, mouseButton);
+            this.dropdownFieldChannel.mouseClicked(mouseX, mouseY, mouseButton);
         }
         super.mouseClicked(mouseX, mouseY, mouseButton);
     }
@@ -245,7 +257,7 @@ public class GuiPartSettings extends GuiContainerExtended {
         }
         if (isFieldChannelEnabled()) {
             fontRenderer.drawString(L10NHelpers.localize("gui.integrateddynamics.partsettings.channel"), guiLeft + 8, guiTop + getFieldChannelY() + 3, isChannelEnabled() ? Helpers.RGBToInt(0, 0, 0) : Helpers.RGBToInt(100, 100, 100));
-            numberFieldChannel.drawTextBox(Minecraft.getMinecraft(), mouseX, mouseY);
+            dropdownFieldChannel.drawTextBox(Minecraft.getMinecraft(), mouseX, mouseY);
         }
     }
 
@@ -273,25 +285,67 @@ public class GuiPartSettings extends GuiContainerExtended {
     }
 
     protected void setSideInDropdownField(EnumFacing side) {
-        dropdownFieldSide.selectPossibility(dropdownEntries.get(side.ordinal()));
+        dropdownFieldSide.selectPossibility(dropdownSideEntries.get(side.ordinal()));
+    }
+
+    protected void setChannelInDropdownField(String channelName) {
+        dropdownFieldChannel.selectPossibility(dropdownChannelEntries.get(channelName));
     }
 
     @Override
     public void onUpdate(int valueId, NBTTagCompound value) {
-        if (isFieldSideEnabled() && valueId == ((ContainerPartSettings) getContainer()).getLastSideValueId()) {
-            int side = ((ContainerPartSettings) getContainer()).getLastSideValue();
+        ContainerPartSettings container = (ContainerPartSettings) getContainer();
+        if (isFieldSideEnabled() && valueId == container.getLastSideValueId()) {
+            int side = container.getLastSideValue();
             setSideInDropdownField(side == -1 ? getDefaultSide() : EnumFacing.VALUES[side]);
         }
-        if (isFieldUpdateIntervalEnabled() && valueId == ((ContainerPartSettings) getContainer()).getLastUpdateValueId()) {
-            numberFieldUpdateInterval.setText(Integer.toString(((ContainerPartSettings) getContainer()).getLastUpdateValue()));
+        if (isFieldUpdateIntervalEnabled() && valueId == container.getLastUpdateValueId()) {
+            numberFieldUpdateInterval.setText(Integer.toString(container.getLastUpdateValue()));
         }
-        if (isFieldPriorityEnabled() && valueId == ((ContainerPartSettings) getContainer()).getLastPriorityValueId()) {
-            numberFieldPriority.setText(Integer.toString(((ContainerPartSettings) getContainer()).getLastPriorityValue()));
+        if (isFieldPriorityEnabled() && valueId == container.getLastPriorityValueId()) {
+            numberFieldPriority.setText(Integer.toString(container.getLastPriorityValue()));
         }
-        if (isFieldChannelEnabled() && valueId == ((ContainerPartSettings) getContainer()).getLastChannelValueId()) {
-            numberFieldChannel.setText(Integer.toString(((ContainerPartSettings) getContainer()).getLastChannelValue()));
+        if (isFieldChannelEnabled() && valueId == container.getLastChannelValueId()) {
+            String lastChannelName = channelMappings.inverse().get(container.getLastChannelValue());
+            setChannelInDropdownField(lastChannelName);
         }
     }
+
+    public class ChannelDropdownEntry implements IDropdownEntry<String> {
+
+        private final String channelName;
+        private final int channelID;
+
+        public ChannelDropdownEntry(Map.Entry<String, Integer> entry) {
+            this(entry.getKey(), entry.getValue());
+        }
+
+        public ChannelDropdownEntry(String channelName, int channelID) {
+            this.channelName = channelName;
+            this.channelID = channelID;
+        }
+
+        @Override
+        public String getMatchString() {
+            return channelName + ": " + channelID;
+        }
+
+        @Override
+        public String getDisplayString() {
+            return getMatchString();
+        }
+
+        @Override
+        public List<String> getTooltip() {
+            return Collections.emptyList();
+        }
+
+        @Override
+        public String getValue() {
+            return this.channelName;
+        }
+    }
+
 
     public class SideDropdownEntry implements IDropdownEntry<EnumFacing> {
 

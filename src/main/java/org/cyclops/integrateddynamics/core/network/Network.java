@@ -1,8 +1,6 @@
 package org.cyclops.integrateddynamics.core.network;
 
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
+import com.google.common.collect.*;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
@@ -59,6 +57,7 @@ public class Network implements INetwork {
     private TreeSet<INetworkElement> updateableElements = null;
     private TreeMap<INetworkElement, Integer> updateableElementsTicks = null;
     private TreeSet<INetworkElement> invalidatedElements = Sets.newTreeSet();
+    private BiMap<String, Integer> channelMappings = HashBiMap.create();
     private Map<INetworkElement, Long> lastSecondDurations = Maps.newHashMap();
 
     private final CapabilityDispatcher capabilityDispatcher;
@@ -174,6 +173,11 @@ public class Network implements INetwork {
         return this.eventBus;
     }
 
+    @Override
+    public BiMap<String, Integer> getChannelMappings() {
+        return this.channelMappings;
+    }
+
     /**
      * Initialize the network element data.
      */
@@ -285,6 +289,11 @@ public class Network implements INetwork {
                 updateableElementsTicks.put(element, oldTickValue);
             }
         }
+    }
+
+    @Override
+    public void setPriorityAndChannel(INetworkElement element, int priority, String channelName) {
+        setPriorityAndChannel(element, priority, channelMappings.get(channelName));
     }
 
     @Override

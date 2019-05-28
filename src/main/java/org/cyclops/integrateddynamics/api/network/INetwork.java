@@ -1,5 +1,6 @@
 package org.cyclops.integrateddynamics.api.network;
 
+import com.google.common.collect.BiMap;
 import net.minecraftforge.common.capabilities.Capability;
 import org.cyclops.cyclopscore.persist.nbt.INBTSerializable;
 import org.cyclops.integrateddynamics.api.network.event.INetworkEventBus;
@@ -25,6 +26,11 @@ public interface INetwork extends IFullNetworkListener, INBTSerializable {
     public INetworkEventBus getEventBus();
 
     /**
+     * @return The mapping between human-readable channel names and internal channel ID's.
+     */
+    public BiMap<String, Integer> getChannelMappings();
+
+    /**
      * Add a given network element to the tickable elements set.
      * @param element The network element.
      */
@@ -43,6 +49,15 @@ public interface INetwork extends IFullNetworkListener, INBTSerializable {
      * @param channel The new channel
      */
     public void setPriorityAndChannel(INetworkElement element, int priority, int channel);
+
+    /**
+     * Set the priority and channel of the given network element.
+     * The {@code channelName} will be mapped to an integer with {@link #getChannelMappings()}.
+     * @param element The network element.
+     * @param priority The new priority
+     * @param channelName The name of the new channel
+     */
+    public void setPriorityAndChannel(INetworkElement element, int priority, String channelName);
 
     /**
      * Kills the network is it had no more network elements.
